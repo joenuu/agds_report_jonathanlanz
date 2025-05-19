@@ -1,0 +1,163 @@
+---
+title: "re_airquality"
+author: "Jonathan Lanz 23-106-255"
+date: "2025-03-10"
+output: html_document
+---
+
+For this exercise, I investigate the R dataset "airquality". This dataset contains daily air quality measurements in New York from May to September 1973 and therefore 153 observations. It consists of the following variables: mean daily ozone [ppb]; solar radiation from 8-12am [lan]; mean wind speed from 7-10am [mph]; maximum daily temperature [°F]; month (1-12); day of month (1-31). 
+
+The question I want to investigate is: what influence do wind, temperature and solar radiation have on the ozone content in the air?
+
+Let's have a glance at the monthly mean of the ozone concentration in the air first.
+
+```{r setup, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(readr)
+library(lubridate)
+library(dplyr)
+
+#plot ozone concentration for each day
+airquality <- datasets::airquality |> 
+  dplyr::mutate(Date = ymd(paste(1973, Month, Day)))
+
+ggplot(data = airquality, aes(x = Date, y = Ozone)) +
+  geom_line() +
+  labs(title = "Ozone concentration", 
+       subtitle = "New York 1973",
+       x = "Date",
+       y = "Ozone concentration [ppb]") +
+  theme_minimal()
+
+```
+
+As one can easily spot, the graph is disrupted several times. This is due to missing ozone measurements on the respective days. Note also that the values vary on a rather vast range. 
+
+For a broader overview, let's now look at the monthly means and maxima. To do this, I remove the rows with missing ozone concentration values from the dataset. I will work with the cleaned version in the remainder.
+
+```{r, warning=FALSE}
+# clean data
+airquality_clean <- airquality |> drop_na()
+
+# rename the months
+airquality_clean$Month <- factor(month.name[airquality_clean$Month], levels = month.name[5:9], ordered = TRUE)
+
+
+# calculate monthly means
+oz_mean <- ggplot(
+  data = airquality_clean |> 
+    group_by(Month) |> 
+    summarize(Ozone = mean(Ozone)),
+  aes(x = Month, y = Ozone)) + 
+  geom_bar(stat = "identity", fill = "grey", colour = "black") +
+  labs(title = "Monthly mean of ozone concentration", 
+       x = "Month", y = "Ozone concentration [ppb]") +
+  theme_minimal()
+
+# calculate monthly maxima
+oz_max <- ggplot(
+  data = airquality_clean |> 
+    group_by(Month) |> 
+    summarize(Ozone = max(Ozone)),
+  aes(x = Month, y = Ozone)) + 
+  geom_bar(stat = "identity", fill = "grey", colour = "black") +
+  labs(title  ="Monthly maximum of ozone concentration",
+       x = "Month",
+       y = "Ozone concentration [ppb]") +
+  theme_minimal()
+
+cowplot::plot_grid(oz_mean, oz_max)
+    
+
+```
+
+The means and maxima have the same trend as the daily measurements: a peak in ozone concentration in July and August. This could potentially indicate a relation between radiation, temperature and wind and ozone content. 
+However, this does not serve as evidence. To address this issue, I calculate the Pearson correlation coefficient.
+
+```{r, warning=FALSE}
+# search for correlation between ozone and other variables
+pearson_rad <- cor(airquality_clean$Ozone, airquality_clean$Solar.R)
+pearson_wind <- cor(airquality_clean$Ozone, airquality_clean$Wind)
+pearson_temp <- cor(airquality_clean$Ozone, airquality_clean$Temp)
+
+
+# create a data frame with the results
+df_cor <- data.frame(
+  cor_oz_rad = pearson_rad,
+  cor_oz_wind = pearson_wind,
+  cor_oz_temp = pearson_temp
+)
+
+
+# display restults
+knitr::kable(df_cor, caption = "Correlation between Ozone and other variables (Pearson)")
+```
+For wind and temperature, the Pearson correlation coeffizient indicates a strong correlation. Double-checking these values with the Spearman correlation coefficient confirms this.
+
+```{r, warning=FALSE}
+#search for correlation between ozone and other variables
+spearman_rad <- cor(airquality_clean$Ozone, airquality_clean$Solar.R, method = "spearman")
+spearman_wind <- cor(airquality_clean$Ozone, airquality_clean$Wind, method = "spearman")
+spearman_temp <- cor(airquality_clean$Ozone, airquality_clean$Temp, method = "spearman")
+
+
+#create a data frame with the results
+df_cor_sp <- data.frame(
+  sp_cor_oz_rad = spearman_rad,
+  sp_cor_oz_wind = spearman_wind,
+  sp_cor_oz_temp = spearman_temp
+)
+
+
+#display restults
+knitr::kable(df_cor_sp, caption = "Correlation between Ozone and other variables (Spearman)")
+```
+
+To illustrate this, I plot the Ozone concentration against the solar radiation, the wind, and the temperature.
+
+```{r, warning=FALSE}
+# Generate plots
+oz_rad <- ggplot(
+  data = airquality,
+  aes(x = Solar.R, y = Ozone)) + 
+  geom_point() +
+  geom_smooth(method = "lm") + 
+  labs(title = "Correlation: Ozone and Radiation",
+       x = "Solar radiation [lan]",
+       y = "Ozone concentration [ppb]") +
+  theme_minimal()
+
+oz_wind <- ggplot(
+  data = airquality,
+  aes(x = Wind, y = Ozone)) + 
+  geom_point() + 
+  geom_smooth(method = "lm") + 
+  labs(title = "Correlation: Ozone and Wind",
+       x = "Wind [mph]",
+       y = "Ozone concentration [ppb]") +
+  theme_minimal()
+
+oz_temp <- ggplot(
+  data = airquality, 
+  aes(x = Temp, y = Ozone)) + 
+  geom_point() + 
+  geom_smooth(method = "lm") +
+  labs(title = "Correlation: Ozone and Temperature", 
+       x = "Temperature [°F]",
+       y = "Ozone concentration [ppb]") +
+  theme_minimal()
+ 
+# Combine plots 
+cowplot::plot_grid(oz_rad, oz_wind, oz_temp)            
+```
+
+I conclude that while solar radiation has only a weak correlation with it, temperature and wind do have a relation with the ozone content in the air. The temperature has a positive correlation, which means that the ozone concentration rises with rising temperature. The opposite is true for wind - strong wind leads to a decline in ozone concentration.
+
+
+
+
+
+
+
+

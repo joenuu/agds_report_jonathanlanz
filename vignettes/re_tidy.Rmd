@@ -1,0 +1,72 @@
+---
+title: "re_tidy"
+author: "Jonathan Lanz 23-106-255"
+output: html_document
+date: "2025-03-03"
+---
+
+In this report, I want to investigate if the CO<sub>2</sub> air content has an effect on soil organic matter.
+
+```{r setup, warning=FALSE, message=FALSE}
+# load tidyverse
+library(tidyverse)
+
+# load data
+soil_carbon_storage <- read_delim("../data/bodendaten_CLEAN.csv", delim = ";")
+```
+
+The CSV file I am working with contains Information about the amount of CO<sub>2</sub> depending on the CO<sub>2</sub> content in the air. One measure was made when CO<sub>2</sub> air concentration was ambient, and one when the CO<sub>2</sub> air concentration is elevated. This experiment has been executed at different places and times, and has been running for various amounts of time. The original dataset was downloaded here: 
+https://www.science.org/doi/10.1126/science.1249534.
+Since the data was not tidy, I manually cleaned it for this exercise. 
+
+My working hypothesis is that the increase of CO<sub>2</sub> in the atmosphere leads to an increase of C in the soil and therefore to an increased soil organic matter. To do so, I define three phases of the experiment and calculate the log-ratio-response (LRR). The LRR indicates whether the change of soil organic matter has a positive or negative trend.
+
+```{r, warning=FALSE}
+# define early, mid and late phase
+early_phase <- soil_carbon_storage |> 
+  filter(Time_years < 3)
+mid_phase <- soil_carbon_storage |> 
+  filter(Time_years >= 3 & Time_years <= 6)
+late_phase <- soil_carbon_storage |>
+  filter(Time_years > 6)
+
+# define a function that calculates the LRR
+lrr_calculation <-  function(ambient, elevated){
+  lrr <-  log(elevated / ambient)
+  return(lrr)
+}
+
+# calculate log-response ratio (LRR) for every phase
+early_phase$lrr <-  lrr_calculation(
+  early_phase$ambient_CO2_mean, early_phase$increased_CO2_mean)
+
+mid_phase$lrr <-  lrr_calculation(
+  mid_phase$ambient_CO2_mean, mid_phase$increased_CO2_mean)
+
+late_phase$lrr <-  lrr_calculation(
+  late_phase$ambient_CO2_mean,late_phase$increased_CO2_mean)
+
+# calculate mean of lrr for every phase
+early_phase_lrr_mean <- mean(early_phase$lrr)
+mid_phase_lrr_mean <-  mean(mid_phase$lrr)
+late_phase_lrr_mean <-  mean(late_phase$lrr)
+
+# Save it in a data frame
+lrr_summary <- data.frame(
+  phase = c("early", "mid", "late"),
+  LRR = c(early_phase_lrr_mean, mid_phase_lrr_mean, late_phase_lrr_mean)
+)
+
+knitr::kable(lrr_summary, caption="LRR over time")
+```
+
+ 
+Since the LRR mean is in all three phases close enough to zero (± 0.05) to make it negligible, the results do not provide evidence for my working hypothesis. I conclude that the data available leads to the assumption that the soil organic matter is not influenced by the CO<sub>2</sub> in the air.
+
+
+
+
+
+
+
+

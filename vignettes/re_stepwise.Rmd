@@ -1,0 +1,193 @@
+---
+title: "re_stepwise"
+author: "Jonathan Lanz 23-106-255"
+date: "2025-04-14"
+output: 
+  html_document: 
+    toc: true
+    number_sections: true
+
+---
+
+```{r setup, warning=FALSE, message=FALSE}
+
+#load libraries
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+
+# load data
+url_half_hourly_fluxes <- "https://raw.githubusercontent.com/geco-bern/agds_book/refs/heads/main/book/data/df_for_stepwise_regression.csv"
+
+half_hourly_fluxes <- read.table(
+  url_half_hourly_fluxes, header = TRUE, sep = ","
+)
+
+```
+
+## The FLUXNET2015 dataset
+The FLUXNET2015 Dataset is a dataset that includes data about fluxes. It consists of many different variables, such as air temperature (TA_F), shortwave radiation (SW_IN_F), longwave radiation (LW_IN_F), vapor pressure deficit (VPD_F), air pressure (PA_F), precipitation (P_F), wind speed (WS_F), photosnthetic photon flux density (PPFD)_IN), global primary production (GPP_NT_VUT_REF) and friction velocity (USTAR). For this analysis, I focus on the variable GPP_NT_VUT_REF, gross primary production. The goal is to generate regression models with one other variable (predictor) in a first step, followed by a stepwise forward regression with increasing number of predictors and elaborate which is the best model.
+
+## Single predictor (bivariate) regression models
+The GPP is a column in the half_hourly_fluxes dataset that indicates the gross primary production. 
+I want to evaluate which bivariate regression model is the best, that is, find the variable that is the best single predictor for regression models.
+
+```{r}
+# preparation
+# only select the numeric values
+half_hourly_fluxes_num <- half_hourly_fluxes |>
+  select(-starts_with("TIMESTAMP"), -starts_with("siteid")) |>
+  drop_na()
+ 
+# create dataframe to store results
+lm_results <- data.frame(
+  predictor = character(), r2 = numeric())
+
+# create dataframe to store predictors
+predictors <- setdiff(names(half_hourly_fluxes_num), c("GPP_NT_VUT_REF"))
+
+# fit linear regression models with different predictors
+for (predictor in predictors){
+  lm_formula <- as.formula(paste("GPP_NT_VUT_REF ~ ", predictor))
+  linear_model <- lm(lm_formula, data = half_hourly_fluxes_num)
+  
+  # calculate R2
+  r2 <- summary(linear_model)$r.squared
+  
+  # store results
+  lm_results <- rbind(lm_results, data.frame(
+    predictor = predictor,
+    R2 = r2))
+}
+
+# plot results
+barplot_lm_results <- ggplot(lm_results, aes(x = predictor, y = R2)) +
+  geom_bar(stat = "identity", fill = "grey", colour="black") +
+  labs(title = "Goodness of bivariate regression models", subtitle = "GPP + another variable", x = "Variable", y = expression("R"^2)) +
+  coord_flip() +
+  theme_classic()
+
+
+barplot_lm_results
+
+```
+
+It can be seen that the regression model with PPFD_IN is the best. Since this variable measures the photosynthesis photon flux density (incoming light that is available for photosynthesis), it makes sense that it has a high correlation with the gross primary production, which depends directly on photosynthesis.
+I select this model and compute the AIC.
+
+```{r, error=TRUE, warning=FALSE, message=FALSE}
+# select the predictor with highest R2
+lm_results_sorted <- lm_results |> arrange(desc(R2))
+best_predictor <- lm_results_sorted$predictor[1]
+
+
+# define best bivariate model 
+best_single_model <- lm(
+  GPP_NT_VUT_REF ~ half_hourly_fluxes_num[[best_predictor]],
+  data = half_hourly_fluxes_num) 
+
+
+# calculate AIC for best bivariate model
+single_model_aic <- AIC(best_single_model)
+
+single_model_aic
+best_single_model
+
+# print R2 of best bivariate model
+lm_results_sorted[1,]
+lm_results_sorted
+```
+
+## Stepwise forward regression
+Now I execute a stepwise forward multivariate regression (i.e., regression with multiple predictors) starting with the PPFD_IN variable as the first predictor.
+
+```{r, error=TRUE, warning=FALSE, message=FALSE}
+
+predictors <- setdiff(names(half_hourly_fluxes_num), c("GPP_NT_VUT_REF", best_predictor))
+selected_predictors <- best_predictor
+
+current_model <- best_single_model
+current_aic <- single_model_aic
+
+stepwise_aic <- c()
+
+max_steps <- length(predictors)
+
+for (step in 1:max_steps) {
+  step_stats <- data.frame(
+    feature = character(),
+    rsq = numeric()
+  )
+  
+  for (predictor in predictors) {
+    
+    temp_formula <- as.formula(
+      paste("GPP_NT_VUT_REF ~", paste(c(selected_predictors, predictor), collapse = "+"))
+    )
+    
+    temp_model <- lm(temp_formula, data = half_hourly_fluxes_num)
+    r2 <- summary(temp_model)$r.squared
+    
+    step_stats <- rbind(step_stats, data.frame(
+      feature = predictor,
+      rsq = r2
+    ))
+  }
+  
+  # Find best new predictor
+  best_new_pred <- step_stats$feature[which.max(step_stats$rsq)]
+  
+  # Build new model with this variable
+  updated_formula <- as.formula(
+    paste("GPP_NT_VUT_REF ~", paste(c(selected_predictors, best_new_pred), collapse = "+"))
+  )
+  
+  updated_model <- lm(updated_formula, data = half_hourly_fluxes_num)
+  updated_aic <- AIC(updated_model)
+  
+  # Check if model is improved
+  if (updated_aic < current_aic) {
+    
+    # Update current model
+    current_model <- updated_model
+    current_aic <- updated_aic
+    
+    # Update predictors
+    selected_predictors <- c(selected_predictors, best_new_pred)
+    predictors <- setdiff(predictors, best_new_pred)
+    
+    # Store progress
+    stepwise_aic <- c(stepwise_aic, current_aic)
+    }
+  else {
+    # Stop if no further improvement
+    break
+  }
+}
+
+
+
+```
+
+For a better overview, let's visualize the AIC in a graph.
+
+```{r, error=TRUE, warning=FALSE, message=FALSE}
+aic_df <- data.frame(
+  Iteration = 1:length(stepwise_aic),
+  AIC = stepwise_aic
+)
+
+
+aic_plot <- aic_df |>
+  ggplot(aes(x = Iteration, y = AIC)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(title = "AIC during stepwise regression", x = "Iteration", y = "AIC") +
+  theme_classic() +
+  scale_x_continuous(breaks = seq(1, 10, 1))
+
+aic_plot
+
+```
+
+It can be seen that the expense required to improve the model is worth it until the 5th predictor (maybe 6). Including more predictors involves too much computational effort compared to the benefit, since it makes the AIC only negligibly better. 

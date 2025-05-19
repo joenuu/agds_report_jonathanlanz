@@ -1,0 +1,266 @@
+---
+title: "re_ml_01"
+author: "Jonathan Lanz 23-106-255"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    toc: true
+    number_sections: true
+---
+## Comparison of the linear regression and KNN models
+
+In the first part of this report, I run through a linear regression model and a KNN model, evaluated on a training and a test set. The goal is to identify the differences and be able to interpret and understand them.
+For both parts of the report, I use a dataset that contains a time series of ecosystem gross primary production (GPP) from Davos with multiple other meteorological variables measured in parallel. 
+
+```{r setup, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(tidyr)
+library(caret)
+library(recipes)
+library(here)
+library(cowplot)
+source(here("R", "re_ml_01_functions.R"))
+
+# load the data
+url1 <- "https://raw.githubusercontent.com/geco-bern/agds_book/refs/heads/main/book/data/FLX_CH-Dav_FLUXNET2015_FULLSET_DD_1997-2014_1-3.csv" 
+df <- read.table(url1, header = TRUE, sep = "," ) 
+daily_fluxes <- df |>
+  
+  # select only the variables we are interested in
+  dplyr::select(TIMESTAMP,
+                GPP_NT_VUT_REF,    # the target
+                ends_with("_QC"),  # quality control info
+                ends_with("_F"),   # includes all all meteorological covariates
+                -contains("JSB")   # weird useless variable
+  ) |>
+  # convert to a nice date object
+  dplyr::mutate(TIMESTAMP = lubridate::ymd(TIMESTAMP)) |>
+
+  # set all -9999 to NA
+  mutate(across(where(is.numeric), ~na_if(., -9999))) |> 
+  
+  # retain only data based on >=80% good-quality measurements
+  # overwrite bad data with NA (not dropping rows)
+  dplyr::mutate(GPP_NT_VUT_REF = ifelse(NEE_VUT_REF_QC < 0.8, NA, GPP_NT_VUT_REF),
+                TA_F           = ifelse(TA_F_QC        < 0.8, NA, TA_F),
+                SW_IN_F        = ifelse(SW_IN_F_QC     < 0.8, NA, SW_IN_F),
+                LW_IN_F        = ifelse(LW_IN_F_QC     < 0.8, NA, LW_IN_F),
+                VPD_F          = ifelse(VPD_F_QC       < 0.8, NA, VPD_F),
+                PA_F           = ifelse(PA_F_QC        < 0.8, NA, PA_F),
+                P_F            = ifelse(P_F_QC         < 0.8, NA, P_F),
+                WS_F           = ifelse(WS_F_QC        < 0.8, NA, WS_F)) |> 
+
+  # drop QC variables (no longer needed)
+  dplyr::select(-ends_with("_QC"))
+
+#split data into training and testing data
+split <- rsample::initial_split(daily_fluxes, prop = 0.7, strata = "VPD_F")
+daily_fluxes_train <- rsample::training(split)
+daily_fluxes_test <- rsample::testing(split)
+
+# scale and center data, box-cox transform
+pp <- recipes::recipe(GPP_NT_VUT_REF ~ SW_IN_F + VPD_F + TA_F, 
+                      data = daily_fluxes_train |> drop_na()) |> 
+  recipes::step_BoxCox(recipes::all_predictors(), -starts_with("TA_F")) |> #TA_F cannot be used beacause it has negative values
+  recipes::step_center(recipes::all_numeric(), -recipes::all_outcomes()) |>
+  recipes::step_scale(recipes::all_numeric(), -recipes::all_outcomes())
+
+# Fit linear regression model
+lm_model <- caret::train(
+  pp, 
+  data = daily_fluxes_train |> drop_na(), 
+  method = "lm",
+  trControl = caret::trainControl(method = "none"),
+  metric = "RMSE"
+)
+
+# Fit KNN model
+knn_model <- caret::train(
+  pp, 
+  data = daily_fluxes_train |> drop_na(), 
+  method = "knn",
+  trControl = caret::trainControl(method = "none"),
+  tuneGrid = data.frame(k = 8),
+  metric = "RMSE"
+)
+
+# evaluate the models
+# lm
+eval_model(mod = lm_model, df_train = daily_fluxes_train, df_test = daily_fluxes_test)
+
+
+# KNN
+eval_model(mod = knn_model, df_train = daily_fluxes, df_test = daily_fluxes_test)
+
+
+
+```
+
+It can be seen that the KNN model performs better than the linear regression model on both the training and the test set. While the R<sup>2</sup> is roughly the same, the RSME is smaller. This is probably due to the lack of complexity in the linear regression model. 
+However, I observed that the performance of the KNN model on the training set is noticeably higher than its performance on the test set. So while the linear regression is not complex enough and therefore underfitted, the KNN model might be a little overfitted. In other words, the linear regression model has a stronger bias and low variance, while the KNN model has a weaker bias and higher variance. Nevertheless, I would choose the KNN model for this dataset.
+
+```{r}
+# prepare the data
+daily_fluxes_vis <- daily_fluxes |> drop_na()
+
+# make predictions
+daily_fluxes_vis$GPP_lm <- predict(lm_model, newdata = daily_fluxes_vis)
+daily_fluxes_vis$GPP_knn <- predict(knn_model, newdata = daily_fluxes_vis)
+
+plot_lm_obs <- ggplot(daily_fluxes_vis) +
+  geom_line(aes(x = TIMESTAMP, y = GPP_knn, color = "KNN model")) +
+  geom_line(aes(x = TIMESTAMP, y = GPP_NT_VUT_REF, color = "Observed")) +
+  labs(
+    title = "KNN model vs. Observed",
+     x = "Date",
+    y = "GPP"
+  ) +
+  theme_classic() +
+  scale_color_manual(values = c("KNN model" = "red", "Observed" = "black"))
+  
+plot_knn_obs <- ggplot(daily_fluxes_vis) +
+  geom_line(aes(x = TIMESTAMP, y = GPP_lm, color = "LR model")) +
+  geom_line(aes(x = TIMESTAMP, y = GPP_NT_VUT_REF, color = "Observed")) +
+  labs(
+    title = "Linear regression model vs. Observed",
+    x = "Date",
+    y = "GPP"
+  ) +
+  theme_classic() +
+  scale_color_manual(values = c("LR model" = "red", "Observed" = "black"))
+
+plot_grid(plot_lm_obs, plot_knn_obs, nrow = 2)
+```
+
+This is quite neat, but it is easier to make a statement if you see all three combined.
+
+```{r}
+plot_lm_knn_obs <- ggplot(daily_fluxes_vis, aes(x = TIMESTAMP)) +
+  geom_line(aes(y = GPP_NT_VUT_REF, color = "Observed")) +
+  geom_line(aes(y = GPP_lm, color = "LR model")) +
+  geom_line(aes(y = GPP_knn, color = "KNN model")) +
+  labs(
+    title = "Linear Regression vs. KNN Model vs. Observed",
+    x = "Date",
+    y = "GPP",
+    color = "Model"
+  ) +
+  theme_classic() +
+  scale_color_manual(
+    values = c(
+      "Observed" = "black",
+      "LR model" = "blue",
+      "KNN model" = "red"
+    )
+  )
+
+plot_lm_knn_obs
+
+```
+
+Here, it can be seen that the KNN model is more fitting, while the linear regression model has a bit more outliers. I must admit, I have a hard time understanding why the LR model has more outliers, although the model being underfitted. As far as I understand it, the KNN model should have more outliers because it is overfitted to the training data.
+
+
+## Comparison of KNN models with varying k
+Now, in the second part of this report, my aim is to make a statement about the goodness of the KNN model depending on the k that is used in the model.
+My hypothesis is that with k approaching 1, the bias of the model will be very low, but the variance will be high, so the model is severely overfitted. Contrarily, with k approaching N (the number of observations in the data), the variance will decrease, but it will have a high bias, resulting in a severely underfitted model.
+
+```{r, warning=FALSE}
+
+# data frame for the results
+k_results <- data.frame(
+  k = numeric(),
+  rsq_train = numeric(),
+  mae_train = numeric(),
+  rmse_train = numeric(),
+  rsq_test = numeric(),
+  mae_test = numeric(),
+  rmse_test = numeric()
+)
+
+
+# iterate knn model with varying k
+for (k_value in seq(1:60)) { # only until 60 because of the computation time - feel free to run it with higher k
+  knn_model <- caret::train(
+  pp, 
+  data = daily_fluxes_train |> drop_na(), 
+  method = "knn",
+  trControl = caret::trainControl(method = "none"),
+  tuneGrid = data.frame(k = k_value),
+  metric = "RMSE"
+  )
+ 
+  #get metrics
+  knn_metrics <- eval_metrics(knn_model, daily_fluxes_train, daily_fluxes_test)
+  
+  k_results <- bind_rows(k_results, data.frame(k = k_value, knn_metrics
+  ))
+  
+}
+```
+
+I until ran it until k = 60 because of the computation time. The results are similar if you execute it with higher k. 
+Let's plot the results. 
+
+```{r}
+# plot mae against k
+plot_mae_k <- ggplot(k_results, aes(x = k)) +
+  geom_line(aes(y = mae_train, color = "Train")) +
+  geom_line(aes(y = mae_test, color = "Test")) +
+  labs(
+    title = "Mean absolute error against k",
+    x = "k",
+    y = "MAE",
+    color = "Dataset") +
+  theme_minimal() +
+  scale_color_manual(values = c("Train" = "blue", "Test" = "orange"))
+ 
+
+# plot rsq against k
+plot_rsq_k <- ggplot(k_results, aes(x = k)) +
+  geom_line(aes(y = rsq_train, color = "Train")) +
+  geom_line(aes(y = rsq_test, color = "Test")) +
+  labs(
+    title = "R squared against k",
+    x = "k",
+    y = "R2",
+    color = "Dataset") +
+  theme_minimal() +
+  scale_color_manual(values = c("Train" = "blue", "Test" = "orange"))
+  
+
+# plot rmse against k
+plot_rmse_k <- ggplot(k_results, aes(x = k)) +
+  geom_line(aes(y = rmse_train, color = "Train")) +
+  geom_line(aes(y = rmse_test, color = "Test")) +
+  labs(
+    title = "Root mean square error against k",
+    x = "k",
+    y = "RMSE",
+    color = "Dataset") +
+  theme_minimal() +
+  scale_color_manual(values = c("Train" = "blue", "Test" = "orange"))
+  
+
+plot_grid(plot_mae_k, plot_rsq_k, plot_rmse_k, nrow = 3)
+
+
+```
+
+Looking at these statistical values, the best bias-variance tradeoff seems to be at around k = 20. Since the values differ each time, depending on the chosen training and test data, if you execute this code it may differ from what you see as an output in this R markdown file.
+
+Here's the code that evaluates the exact best k.
+
+
+```{r}
+# find the optimal k
+k_optimal <- which.min(k_results$mae_test)
+
+k_optimal
+```
+
+``

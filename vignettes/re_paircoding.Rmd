@@ -1,0 +1,15 @@
+---
+title: "re_paircoding"
+author: "Jonathan Lanz 23-106-255"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+Below are the links for the github repositories in which we executed the paircoding report exercise. 
+
+https://github.com/joenuu/8_jonathan_lisa
+
+https://github.com/joenuu/8a_jonathan_lisa
+
+
+

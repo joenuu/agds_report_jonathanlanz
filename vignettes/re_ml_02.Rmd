@@ -1,0 +1,131 @@
+---
+title: "re_ml_02"
+author: "Jonathan Lanz 23-106-255"
+date: "`r Sys.Date()`"
+output: html_document
+    
+    
+  
+---
+
+## Testing the generalisability of a flux model to other sites
+In this report, I work with FLUXNET data from two locations in Switzerland. One, Laegern (CH-Lae) is located in the Canton of Zurich, the other, Davos (CH-Dav) in the Canton of Grisons. I want to investigate the generalizability of KNN models. In the following R Code chunk, I read and prepare the data,load a function that executes a KNN model, and apply the different training sets to different testing sets. That is, one training set from Davos, one from Laegern and one from both locations are evaluated on, again, one testing set from Davos, one from Laegern and one from both locations.
+
+```{r, warning=FALSE, message=FALSE}
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(tidyr)
+library(caret)
+library(here)
+library(recipes)
+source(here("R", "re_ml_02_functions.R"))
+
+#----Laegern----
+url1 <- "https://raw.githubusercontent.com/geco-bern/agds/refs/heads/main/data/FLX_CH-Lae_FLUXNET2015_FULLSET_DD_2004-2014_1-4.csv"
+df1 <- read.table(url1, header = TRUE, sep = "," )
+
+# same code as in re_ml_01, therefore comments are obsolete
+daily_fluxes_lae <-  df1 |>
+  dplyr::select(TIMESTAMP,
+                GPP_NT_VUT_REF,    
+                ends_with("_QC"),  
+                ends_with("_F"),   
+                -contains("JSB")   
+  ) |>
+  dplyr::mutate(TIMESTAMP = lubridate::ymd(TIMESTAMP)) |>
+  mutate(across(where(is.numeric), ~na_if(., -9999))) |> 
+  dplyr::mutate(GPP_NT_VUT_REF = ifelse(NEE_VUT_REF_QC < 0.8, NA, GPP_NT_VUT_REF),
+                TA_F           = ifelse(TA_F_QC        < 0.8, NA, TA_F),
+                SW_IN_F        = ifelse(SW_IN_F_QC     < 0.8, NA, SW_IN_F),
+                LW_IN_F        = ifelse(LW_IN_F_QC     < 0.8, NA, LW_IN_F),
+                VPD_F          = ifelse(VPD_F_QC       < 0.8, NA, VPD_F),
+                PA_F           = ifelse(PA_F_QC        < 0.8, NA, PA_F),
+                P_F            = ifelse(P_F_QC         < 0.8, NA, P_F),
+                WS_F           = ifelse(WS_F_QC        < 0.8, NA, WS_F)) |> 
+  dplyr::select(-ends_with("_QC")) |>
+  dplyr::select(-P_F)
+
+# get the model and the test data with prep_model
+prep_model_lae <- prep_model(daily_fluxes = daily_fluxes_lae, proportion=0.8)
+knn_model_lae <- prep_model_lae$knn_model
+
+daily_fluxes_lae_test <- prep_model_lae$daily_fluxes_test
+
+#----Davos----
+url2 <- "https://raw.githubusercontent.com/geco-bern/agds_book/refs/heads/main/book/data/FLX_CH-Dav_FLUXNET2015_FULLSET_DD_1997-2014_1-3.csv" 
+df2 <- read.table(url2, header = TRUE, sep = "," ) 
+
+# same code as in re_ml_01, therefore comments are obsolete
+daily_fluxes_dav <- df2 |>
+  dplyr::select(TIMESTAMP,
+                GPP_NT_VUT_REF,    
+                ends_with("_QC"),  
+                ends_with("_F"),   
+                -contains("JSB")  
+  ) |>
+  dplyr::mutate(TIMESTAMP = lubridate::ymd(TIMESTAMP)) |>
+  mutate(across(where(is.numeric), ~na_if(., -9999))) |> 
+  dplyr::mutate(GPP_NT_VUT_REF = ifelse(NEE_VUT_REF_QC < 0.8, NA, GPP_NT_VUT_REF),
+                TA_F           = ifelse(TA_F_QC        < 0.8, NA, TA_F),
+                SW_IN_F        = ifelse(SW_IN_F_QC     < 0.8, NA, SW_IN_F),
+                LW_IN_F        = ifelse(LW_IN_F_QC     < 0.8, NA, LW_IN_F),
+                VPD_F          = ifelse(VPD_F_QC       < 0.8, NA, VPD_F),
+                PA_F           = ifelse(PA_F_QC        < 0.8, NA, PA_F),
+                P_F            = ifelse(P_F_QC         < 0.8, NA, P_F),
+                WS_F           = ifelse(WS_F_QC        < 0.8, NA, WS_F)) |> 
+  dplyr::select(-ends_with("_QC")) |>
+  dplyr::select(-P_F)
+
+# get the model and the test data with prep_model
+prep_model_dav <- prep_model(daily_fluxes_dav, proportion=0.8)
+knn_model_dav <- prep_model_dav$knn_model
+
+daily_fluxes_dav_test <- prep_model_dav$daily_fluxes_test
+
+
+#----Laegern and Davos combined----
+identical(names(daily_fluxes_lae), names(daily_fluxes_dav)) # check if the data has the same columns
+
+daily_fluxes_combined <- rbind(daily_fluxes_dav, daily_fluxes_lae)
+prep_model_combined <- prep_model(daily_fluxes_combined, proportion=0.8)
+knn_model_combined <- prep_model_combined$knn_model
+
+daily_fluxes_combined_test <- prep_model_combined$daily_fluxes_test
+
+# get the model
+
+
+#----Test each model on each test set----
+# generate tibbles with the metrics
+results_lae <- bind_rows(
+  get_metrics(knn_model_lae, daily_fluxes_lae_test, "Laegern", "Laegern"),
+  get_metrics(knn_model_lae, daily_fluxes_dav_test, "Laegern", "Davos"),
+  get_metrics(knn_model_lae, daily_fluxes_combined_test, "Laegern", "Combined")
+)
+
+results_dav <- bind_rows(
+  get_metrics(knn_model_dav, daily_fluxes_lae_test, "Davos", "Laegern"),
+  get_metrics(knn_model_dav, daily_fluxes_dav_test, "Davos", "Davos"),
+  get_metrics(knn_model_dav, daily_fluxes_combined_test, "Davos", "Combined")
+)
+
+
+results_combined <- bind_rows(
+  get_metrics(knn_model_combined, daily_fluxes_lae_test, "Combined", "Laegern"),
+  get_metrics(knn_model_combined, daily_fluxes_dav_test, "Combined", "Davos"),
+  get_metrics(knn_model_combined, daily_fluxes_combined_test, "Combined", "Combined")
+)
+
+results_combined
+
+knitr::kable(results_lae, caption = "Training sets from Laegern evaluated against different test sets")
+
+knitr::kable(results_dav, caption = "Training sets from Davos evaluated against different test sets")
+
+knitr::kable(results_combined, caption = "Training sets from Davos and Laegern evaluated against different test sets")
+```
+
+It can be seen that the R<sup>2</sup> and the RMSE differ from training set to training set. As could be expected, the training set that was trained on data from both sites is better overall. What is strange is that the training set from Davos seems to perfrom exceptionally well on it's own test set, and the same is true for the combined training set on the Davos test set. My theory is that this is due to the fact that there is significantly more data from Davos than from Laegern, and therefore the combined training set is trained on more data from Davos than from Laegern. In the end, I cannot exclude the possiblity that the error is on my site and my coding skills, 
+
+I find it at least debatable if this is really an "out-of-sample"-setup. After all, the climate in Laegern and Davos does not differ too much. Both measurement stations are sun-facing and in a forest (although Laegern is in a deciduous, and Davos in a coniferous forest). The big difference is the altitude, but maybe the sites are too similar. If the model was tested against data from e.g. Southern Spain, the differences in climate and vegetation would likely have a much heavier impact on the model performance. It seems hard to make a statement on the generalizability of the models generated in this report, so I prefer leaving it an open question needing more further investigation.
